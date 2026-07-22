@@ -1,0 +1,16 @@
+{
+  "platforms": [
+    "android",
+    "apple"
+  ],
+  "android": {
+    "modules": [
+      "expo.modules.sonycamera.SonyCameraModule"
+    ]
+  },
+  "apple": {
+    "modules": [
+      "SonyCameraModule"
+    ]
+  }
+}

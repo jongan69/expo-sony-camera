@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Sony Camera Module Example",
+    "slug": "expo-sony-camera-example",
+    "version": "0.1.0",
+    "orientation": "default",
+    "plugins": [
+      "expo-sony-camera"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jongan69.exposonycameraexample"
+    },
+    "android": {
+      "package": "com.jongan69.exposonycameraexample"
+    }
+  }
+}

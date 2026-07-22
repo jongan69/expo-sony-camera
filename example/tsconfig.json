@@ -1,0 +1,10 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "expo-sony-camera": ["../src/index"],
+      "expo-sony-camera/*": ["../src/*"]
+    }
+  }
+}
