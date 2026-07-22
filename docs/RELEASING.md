@@ -31,6 +31,16 @@
    npm view expo-sony-camera dist.tarball
    ```
 
+If the account has two-factor authentication enabled for publishing, the NPM session
+must use either a one-time publish code or a granular access token configured with
+publish permission and 2FA bypass. A normal browser login or read-only token is not
+enough for `npm publish`.
+
+For a one-time local publish, run the command interactively and provide the current NPM
+authenticator code when prompted. For repeatable CI publishing, configure the package's
+NPM trusted publisher or use a dedicated granular token in the GitHub Actions secret
+store; never commit the token or place it in an Expo public environment variable.
+
 ## GitHub release
 
 - `main` is the release branch.
