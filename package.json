@@ -10,6 +10,7 @@
     "lint": "eslint src/",
     "format:check": "prettier --check src example app.plugin.js",
     "test": "node internal/module_scripts/test.js",
+    "prepublishOnly": "npm run build && npm run lint && npm test",
     "prepare": "node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js",
     "open:android": "node internal/module_scripts/open-android.js"
@@ -27,6 +28,9 @@
   "author": "Jonathan Gan <jonathang132298@gmail.com> (https://github.com/jongan69)",
   "license": "MIT",
   "homepage": "https://github.com/jongan69/expo-sony-camera#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.26.0",
