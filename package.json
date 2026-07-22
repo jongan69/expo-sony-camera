@@ -11,6 +11,7 @@
     "lint": "eslint src/",
     "format:check": "prettier --check src example app.plugin.js",
     "test": "node internal/module_scripts/test.js",
+    "test:watch": "node internal/module_scripts/test.js --watch",
     "prepublishOnly": "npm run build && npm run lint && npm test",
     "prepare": "node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js",

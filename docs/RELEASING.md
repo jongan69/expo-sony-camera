@@ -17,6 +17,8 @@
 
 `npm run build` is intentionally a one-shot compile. Use `npm run build:watch` only
 when actively developing the TypeScript bridge; publishing must never enter watch mode.
+`npm test` is also a one-shot test run; use `npm run test:watch` for interactive Jest
+development.
 
 3. Inspect the tarball contents. The example app and native test sources should not be
    included in the published payload.
