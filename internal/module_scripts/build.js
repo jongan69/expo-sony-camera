@@ -19,14 +19,5 @@ if (SUBTARGETS.includes(target)) {
   tscArgs = [...args];
 }
 
-if (
-  process.stdout.isTTY &&
-  !process.env.CI &&
-  !process.env.EXPO_NONINTERACTIVE &&
-  !tscArgs.includes('--watch')
-) {
-  tscArgs.push('--watch');
-}
-
 const result = spawnSyncWithAutoShell('tsc', tscArgs, { stdio: 'inherit' });
 process.exit(result.status ?? 0);
