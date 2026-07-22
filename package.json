@@ -21,7 +21,10 @@
     "expo-sony-camera",
     "SonyCamera"
   ],
-  "repository": "https://github.com/jongan69/expo-sony-camera",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jongan69/expo-sony-camera.git"
+  },
   "bugs": {
     "url": "https://github.com/jongan69/expo-sony-camera/issues"
   },
