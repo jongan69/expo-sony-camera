@@ -49,7 +49,7 @@ surface that another Expo app can build on top of.
 ## JavaScript API
 
 ```tsx
-import SonyCamera, { SonyCameraView } from "expo-sony-camera";
+import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
 
 const state = SonyCamera?.getState();
 await SonyCamera?.connect();
@@ -58,11 +58,19 @@ const photo = await SonyCamera?.capturePhoto();
 await SonyCamera?.stopLiveView();
 await SonyCamera?.disconnect();
 
-<SonyCameraView active style={{ flex: 1 }} />
+<SonyCameraView active style={{ flex: 1 }} />;
 ```
 
 The module emits `onStateChanged`, `onDeviceAttached`, and `onPhotoCaptured` events.
 On web, the module is unavailable and the view renders nothing.
+
+## Documentation
+
+- [Architecture](./docs/ARCHITECTURE.md)
+- [Support matrix and evidence levels](./docs/SUPPORT_MATRIX.md)
+- [PTP3 and future capability roadmap](./docs/ROADMAP.md)
+- [Physical hardware validation](./docs/HARDWARE_VALIDATION.md)
+- [Releasing to NPM](./docs/RELEASING.md)
 
 ## Camera setup
 
