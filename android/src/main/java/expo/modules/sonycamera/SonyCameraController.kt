@@ -539,9 +539,11 @@ internal class SonyCameraController(private val context: Context) {
     streaming.set(false)
     runCatching { transport?.close() }
     transport = null
+    val hadScalar = scalarTransport != null
     runCatching { scalarTransport?.close() }
     scalarTransport = null
     scalarDescriptor = null
+    if (hadScalar) cameraNetwork.release()
     if (lostScalarConnection) {
       updateState("reconnecting", "Sony camera connection was lost. Reconnecting…")
       scheduleScalarReconnect()

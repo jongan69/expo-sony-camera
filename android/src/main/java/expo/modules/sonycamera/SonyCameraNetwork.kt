@@ -27,7 +27,7 @@ internal class SonyCameraNetwork(context: Context, private val trace: (String) -
   private val connectivityManager =
     context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
   private val network = AtomicReference<Network?>(null)
-  private var callback: ConnectivityManager.NetworkCallback? = null
+  @Volatile private var callback: ConnectivityManager.NetworkCallback? = null
 
   /**
    * Requests the camera's Wi-Fi network and waits briefly for it to become available.
