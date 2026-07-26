@@ -6,6 +6,13 @@ export type SonyCameraTransport = 'usb' | 'ptp_ip' | 'scalar_http';
 export type SonyConnectionMode = 'usb' | 'wifi_direct' | 'infrastructure_wifi';
 export type SonyCameraCertification = 'certified' | 'capability_detected';
 
+/**
+ * Shared lifecycle contract for current and planned transports.
+ *
+ * States that are **not yet emitted** by any current adapter but are reserved
+ * for future transports (PTP3, property transfers, movie recording):
+ * `candidate_found`, `joining_network`, `recording`, `transferring`.
+ */
 export type SonyCameraStateName =
   | 'unsupported'
   | 'disconnected'
@@ -37,6 +44,13 @@ export type SonyCameraControlCategory =
   | 'network'
   | 'health'
   | 'advanced';
+/**
+ * Capability flags derived from the camera's own advertised operation, property,
+ * and event codes. Not every flag has a runtime implementation yet.
+ *
+ * **Reserved for future transports / property-control work:**
+ * `manualFocus`, `zoom`, `presets`.
+ */
 export type SonyCameraFeature =
   | 'liveView'
   | 'stillCapture'

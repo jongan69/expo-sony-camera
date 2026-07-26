@@ -1,6 +1,6 @@
 {
   "name": "expo-sony-camera",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Expo and React Native Sony camera control module for Android and iOS: USB PTP2, ScalarWebAPI Wi-Fi live view, remote shutter, and JPEG capture",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -73,6 +73,14 @@
   "publishConfig": {
     "access": "public"
   },
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./build/*": "./build/*"
+  },
+  "sideEffects": false,
   "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.26.0",

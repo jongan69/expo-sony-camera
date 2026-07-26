@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name           = 'SonyCamera'
-  s.version        = '0.1.1'
+  s.version        = '0.2.0'
   s.summary        = 'Expo native module for Sony camera live view and remote capture'
   s.description    = 'ImageCaptureCore bridge for Sony camera live view and remote still capture.'
   s.author         = 'Jonathan Gan'

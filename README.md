@@ -134,8 +134,12 @@ command pass-through for the attached camera.
 
 For ScalarWebAPI, connect the phone to the camera's Wi-Fi Direct network before opening
 the example app. The camera must expose the documented ScalarWebAPI descriptor and live
-view endpoint. Current Android discovery probes `192.168.122.1` and `192.168.0.1`; it
-does not yet perform general SSDP discovery or join the camera network for the user.
+view endpoint. Android discovery uses SSDP multicast (`urn:schemas-sony-com:service:ScalarWebAPI:1`)
+and falls back to the fixed Wi-Fi Direct addresses `192.168.122.1` and `192.168.0.1`.
+
+> **Android cleartext traffic:** The library manifest sets `android:usesCleartextTraffic="true"`.
+> This is required because Sony camera Wi-Fi networks do not provide HTTPS. The setting is
+> scoped to the library; it does not affect other network traffic in the host app.
 
 ## Development
 
