@@ -41,6 +41,7 @@ internal class SonyCameraController(private val context: Context) {
     private const val STREAM_METRIC_INTERVAL_MS = 5_000L
     private const val SCALAR_RECONNECT_DELAY_MS = 750L
     private const val SCALAR_DISCOVERY_COOLDOWN_MS = 2_000L
+    private val CONNECT_OPTION_KEYS = setOf("candidateId", "preferredProtocol", "preferredTransport")
   }
 
   private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -59,6 +60,7 @@ internal class SonyCameraController(private val context: Context) {
   @Volatile private var lastScalarDiscoveryFinishedAt = 0L
   private val permissionAction = context.packageName + PERMISSION_ACTION_SUFFIX
   private val diagnosticsPreferences = context.getSharedPreferences(DIAGNOSTICS_PREFERENCE, Context.MODE_PRIVATE)
+  private val cameraNetwork = SonyCameraNetwork(context, ::trace)
   private val diagnostics = ArrayDeque<String>()
   private var transport: SonyPtpTransport? = null
   private var scalarTransport: SonyScalarWebApiTransport? = null
@@ -70,6 +72,9 @@ internal class SonyCameraController(private val context: Context) {
   private var frameCount = 0
   private var liveViewWidth = 0
   private var liveViewHeight = 0
+  // Retained so a preview still can be produced without pushing every frame across the
+  // JavaScript bridge, which at ~10 fps would dominate the bridge for no benefit.
+  @Volatile private var lastFrameJpeg: ByteArray? = null
 
   private val usbReceiver = object : BroadcastReceiver() {
     override fun onReceive(receiverContext: Context, intent: Intent) {
@@ -182,7 +187,16 @@ internal class SonyCameraController(private val context: Context) {
 
   fun statePayload(): Map<String, Any?> = payloadFor(state, message, device)
 
-  fun connectBlocking(): Map<String, Any?> {
+  /**
+   * [options] carries the `SonyConnectOptions` contract. Candidate selection and
+   * transport overrides are not implemented, so an unsupported override is recorded and
+   * ignored rather than silently pretending it was honoured.
+   */
+  fun connectBlocking(options: Map<String, Any?> = emptyMap()): Map<String, Any?> {
+    val overrides = options.filterKeys { it in CONNECT_OPTION_KEYS }.filterValues { it != null }
+    if (overrides.isNotEmpty()) {
+      trace("connect options ignored (candidate selection is not implemented): $overrides")
+    }
     val attached = device ?: findSonyPtpDevice()
     if (attached == null) {
       enqueueScalarConnect()
@@ -254,7 +268,8 @@ internal class SonyCameraController(private val context: Context) {
     updateState("discovering", "Looking for a Sony camera on this Wi-Fi network…")
     executor.execute {
       try {
-        val next = SonyScalarWebApiTransport.discover(::trace)
+        cameraNetwork.acquire()
+        val next = SonyScalarWebApiTransport.discover(cameraNetwork, ::trace)
         scalarDescriptor = next.descriptor()
         updateState("authenticating", "Negotiating Sony ScalarWebAPI…")
         next.connect()
@@ -269,6 +284,7 @@ internal class SonyCameraController(private val context: Context) {
         scalarTransport?.close()
         scalarTransport = null
         scalarDescriptor = null
+        cameraNetwork.release()
         trace("Scalar discovery idle reason=${error.message ?: error::class.java.simpleName}")
         updateState("disconnected", "Connect to the Sony camera Wi-Fi or attach a Sony camera by USB.")
       } finally {
@@ -337,6 +353,7 @@ internal class SonyCameraController(private val context: Context) {
               trace("first live-view JPEG received bytes=${jpeg.size}")
               listeners.forEach { it.onStateChanged(statePayload()) }
             }
+            lastFrameJpeg = jpeg
             listeners.forEach { it.onFrame(jpeg) }
             if (receivedAt - lastMetricAt >= STREAM_METRIC_INTERVAL_MS) {
               val intervalMs = maxOf(1L, receivedAt - lastMetricAt)
@@ -382,6 +399,19 @@ internal class SonyCameraController(private val context: Context) {
     frameFuture?.cancel(false)
     frameFuture = null
     if (state == "streaming") updateState("ready", "Sony camera is ready.")
+  }
+
+  /**
+   * Persists the most recent live-view frame and returns it as a photo payload.
+   *
+   * This is a preview-resolution still (typically 640x360), not a full capture. It exists
+   * so an app can grab what is on screen without triggering the shutter; it is not a
+   * substitute for [capturePhotoBlocking].
+   */
+  fun capturePreviewFrameBlocking(): Map<String, Any?> {
+    val jpeg = lastFrameJpeg
+      ?: throw SonyPtpException("No Sony live-view frame has been received yet.")
+    return persistCapturedJpeg(jpeg, notify = false)
   }
 
   fun capturePhotoBlocking(): Map<String, Any?> {
@@ -446,6 +476,7 @@ internal class SonyCameraController(private val context: Context) {
 
   fun disconnectBlocking(preserveLiveViewRequest: Boolean = false): Map<String, Any?> {
     stopLiveView(preserveRequest = preserveLiveViewRequest)
+    lastFrameJpeg = null
     val old = transport
     transport = null
     val oldScalar = scalarTransport
@@ -453,11 +484,12 @@ internal class SonyCameraController(private val context: Context) {
     scalarDescriptor = null
     runCatching { old?.close() }
     runCatching { oldScalar?.close() }
+    if (oldScalar != null) cameraNetwork.release()
     device = findSonyPtpDevice()
     return updateState("disconnected", "Sony camera disconnected.")
   }
 
-  private fun persistCapturedJpeg(jpeg: ByteArray): Map<String, Any?> {
+  private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {
     val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
       ?: throw SonyPtpException("Sony returned an unreadable image.")
     val name = "sony-camera-${System.currentTimeMillis()}.jpg"
@@ -471,13 +503,14 @@ internal class SonyCameraController(private val context: Context) {
       "mimeType" to "image/jpeg",
     )
     bitmap.recycle()
-    listeners.forEach { it.onPhotoCaptured(payload) }
+    if (notify) listeners.forEach { it.onPhotoCaptured(payload) }
     trace("captured JPEG persisted bytes=${jpeg.size}")
     return payload
   }
 
   fun close() {
     disconnectBlocking()
+    cameraNetwork.release()
     runCatching { context.unregisterReceiver(usbReceiver) }
     executor.shutdownNow()
     streamExecutor.shutdownNow()
@@ -586,10 +619,12 @@ internal class SonyCameraController(private val context: Context) {
         "transport" to "usb",
         "connectionMode" to "usb",
         "certification" to "capability_detected",
-        "capabilities" to mapOf(
-          "protocols" to listOf("sony_camera_control_ptp2"), "transports" to listOf("usb"), "connectionModes" to listOf("usb"),
-          "categories" to listOf("connection", "live_view", "still_capture", "health"),
-          "features" to mapOf("liveView" to true, "stillCapture" to true, "imageTransfer" to true, "halfPress" to true, "touchFocus" to (scalarTransport?.supportsTouchFocus() == true), "properties" to false, "movieRecording" to false, "mediaBrowser" to false, "events" to false),
+        // Derived from the camera's own GetDeviceInfo response, not from a model name or
+        // from what this package happens to implement.
+        "capabilities" to SonyCapabilityResolver.resolve(
+          transport?.deviceInfo,
+          protocol = "sony_camera_control_ptp2",
+          transport = "usb",
         ),
       )
     } else if (scalarDescriptor != null || scalarTransport != null) {
@@ -603,14 +638,48 @@ internal class SonyCameraController(private val context: Context) {
         "transport" to "scalar_http",
         "connectionMode" to "wifi_direct",
         "certification" to "capability_detected",
-        "capabilities" to mapOf(
-          "protocols" to listOf("sony_scalar_webapi_v1"), "transports" to listOf("scalar_http"), "connectionModes" to listOf("wifi_direct"),
-          "categories" to listOf("connection", "live_view", "still_capture", "focus", "health"),
-          "features" to mapOf("liveView" to true, "stillCapture" to true, "imageTransfer" to true, "halfPress" to true, "properties" to false, "movieRecording" to false, "mediaBrowser" to false, "events" to false),
-        ),
+        // ScalarWebAPI advertises capability as a method list rather than PTP codes, so
+        // each flag is gated on the camera actually listing the method that implements it.
+        "capabilities" to scalarCapabilities(),
       )
     }
     return result
+  }
+
+  /** Capabilities for the active ScalarWebAPI session, gated on its advertised API list. */
+  private fun scalarCapabilities(): Map<String, Any?> {
+    val scalar = scalarTransport
+    fun advertises(method: String) = scalar?.supports(method) == true
+    val liveView = advertises("startLiveview") || scalar != null
+    val stillCapture = advertises("actTakePicture")
+    val movie = advertises("startMovieRec")
+    val media = advertises("getContentList")
+    val categories = buildList {
+      add("connection")
+      if (liveView) add("live_view")
+      if (stillCapture) add("still_capture")
+      if (advertises("setTouchAFPosition") || advertises("actHalfPressShutter")) add("focus")
+      if (movie) add("movie")
+      if (media) add("media")
+      add("health")
+    }
+    return mapOf(
+      "protocols" to listOf("sony_scalar_webapi_v1"),
+      "transports" to listOf("scalar_http"),
+      "connectionModes" to listOf("wifi_direct"),
+      "categories" to categories,
+      "features" to mapOf(
+        "liveView" to liveView,
+        "stillCapture" to stillCapture,
+        "imageTransfer" to stillCapture,
+        "properties" to false,
+        "movieRecording" to movie,
+        "mediaBrowser" to media,
+        "events" to advertises("getEvent"),
+        "halfPress" to advertises("actHalfPressShutter"),
+        "touchFocus" to advertises("setTouchAFPosition"),
+      ),
+    )
   }
 
   private fun trace(event: String) {
@@ -625,6 +694,35 @@ internal class SonyCameraController(private val context: Context) {
   }
 
   private fun diagnosticSnapshot(): List<String> = synchronized(diagnostics) { diagnostics.toList().takeLast(MAX_PAYLOAD_DIAGNOSTICS) }
+
+  /**
+   * The full retained trace, not the truncated copy embedded in state payloads.
+   *
+   * Entries are already sanitised at the point of writing: the transport traces operation
+   * codes, sizes, and timings, never Wi-Fi credentials, serial numbers, or image bytes.
+   */
+  fun diagnosticsSnapshot(): Map<String, Any?> {
+    val entries = synchronized(diagnostics) { diagnostics.toList() }
+    val result = linkedMapOf<String, Any?>("entries" to entries)
+    when {
+      scalarTransport != null -> {
+        result["protocol"] = "sony_scalar_webapi_v1"
+        result["transport"] = "scalar_http"
+      }
+      transport != null -> {
+        result["protocol"] = "sony_camera_control_ptp2"
+        result["transport"] = "usb"
+      }
+    }
+    return result
+  }
+
+  fun clearDiagnostics() {
+    synchronized(diagnostics) {
+      diagnostics.clear()
+      diagnosticsPreferences.edit().remove(DIAGNOSTICS_KEY).apply()
+    }
+  }
 
   private fun describeDevice(candidate: UsbDevice): String {
     val interfaces = (0 until candidate.interfaceCount).joinToString(",") { index ->

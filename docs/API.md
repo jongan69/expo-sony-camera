@@ -1,8 +1,8 @@
 # Public API
 
-This document describes the callable `0.1.1` API. Some exported TypeScript types reserve
-future capability, property, preset, candidate-selection, and diagnostics APIs; type
-availability does not mean a corresponding native function is implemented.
+This document describes the callable API. Some exported TypeScript types reserve future
+capability, property, preset, and candidate-selection APIs; type availability does not
+mean a corresponding native function is implemented.
 
 ## Module availability
 
@@ -28,9 +28,31 @@ package to JavaScript alone is not enough.
 | `startLiveView()`                      | `Promise<SonyCameraState>` | Yes          | Yes          | Requests native JPEG streaming                                        |
 | `stopLiveView()`                       | `Promise<SonyCameraState>` | Yes          | Yes          | Stops the live-view request loop                                      |
 | `capturePhoto()`                       | `Promise<SonyPhoto>`       | Yes          | Yes          | Captures and caches a JPEG, then returns its URI                      |
+| `capturePreviewFrame()`                | `Promise<SonyPhoto>`       | Yes          | Yes          | Saves the current live-view frame; no shutter, preview resolution     |
 | `focusAt(x, y, viewWidth, viewHeight)` | `Promise<SonyFocusResult>` | Scalar only  | No           | Succeeds only if the camera advertises coordinate touch focus         |
-| `getDiagnostics()`                     | `SonyDiagnosticsSnapshot`  | Not exported | Not exported | Reserved TypeScript declaration                                       |
-| `clearDiagnostics()`                   | `void`                     | Not exported | Not exported | Reserved TypeScript declaration                                       |
+| `getDiagnostics()`                     | `SonyDiagnosticsSnapshot`  | Yes          | Yes          | Full retained trace; synchronous                                      |
+| `clearDiagnostics()`                   | `void`                     | Yes          | Yes          | Clears the retained trace, including Android's persisted copy         |
+
+`connect(options)` accepts the `SonyConnectOptions` argument on both platforms. Candidate
+selection and transport overrides are **not implemented**: an override is recorded in the
+diagnostics trace and then ignored. It is accepted so that the documented signature does
+not throw, not because it selects anything.
+
+## Diagnostics
+
+```ts
+const { entries, protocol, transport } = SonyCamera.getDiagnostics();
+SonyCamera.clearDiagnostics();
+```
+
+`entries` is the full retained trace — operation codes, container sizes, state
+transitions, and stream metrics. `protocol` and `transport` identify the active adapter
+and are absent when nothing is connected. `SonyCameraState.diagnostics` carries a
+truncated tail of the same buffer, so the two do not have to be correlated by hand.
+
+Entries are sanitised where they are written: they record codes, sizes, and timings, never
+image bytes, serial numbers, or network credentials. Android persists the buffer across
+launches; iOS keeps it in memory for the lifetime of the module.
 
 All coordinates passed to `focusAt` are view-space coordinates. The Android Scalar
 adapter normalizes them for Sony's API. Callers must handle `status: 'unsupported'`;

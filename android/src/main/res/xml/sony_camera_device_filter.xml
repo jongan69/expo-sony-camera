@@ -2,4 +2,9 @@
 <resources>
   <!-- Sony vendor plus Still Image/PTP interface. Product ID is recorded on bench validation. -->
   <usb-device vendor-id="1356" class="6" subclass="1" protocol="1" />
+  <!-- Some Sony bodies enumerate the still-image interface without the PTP subclass or
+       protocol descriptors while in PC Remote mode. The runtime check in
+       SonyCameraController.isSonyPtp still requires interface class 6, so this only
+       widens which attach events Android delivers to the app. -->
+  <usb-device vendor-id="1356" class="6" />
 </resources>

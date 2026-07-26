@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 internal class SonyScalarWebApiTransport private constructor(
   private val descriptor: Descriptor,
+  private val network: SonyCameraNetwork,
   private val trace: (String) -> Unit,
 ) {
   data class Descriptor(
@@ -18,18 +19,32 @@ internal class SonyScalarWebApiTransport private constructor(
     val apiBaseUrl: String,
     val liveViewUrl: String,
     val modelName: String,
+    /**
+     * Service name to endpoint URL.
+     *
+     * Sony advertises `camera`, `system`, `avContent`, and `guide` separately. Assuming
+     * every method lives under `camera` makes media browsing unreachable.
+     */
+    val serviceUrls: Map<String, String> = emptyMap(),
   )
 
   companion object {
     private val DIRECT_IP_CANDIDATES = listOf("192.168.122.1", "192.168.0.1")
 
-    fun discover(trace: (String) -> Unit): SonyScalarWebApiTransport {
+    fun discover(network: SonyCameraNetwork, trace: (String) -> Unit): SonyScalarWebApiTransport {
       var lastError: Throwable? = null
-      DIRECT_IP_CANDIDATES.forEach { host ->
+
+      // SSDP first: it finds the camera wherever the network put it. The fixed Wi-Fi
+      // Direct addresses stay as a bounded fallback because multicast is unreliable on
+      // some Android builds and blocked on some networks.
+      val candidates = SonySsdpDiscovery.search(trace = trace) +
+        DIRECT_IP_CANDIDATES.map { "http://$it:64321/DmsRmtDesc.xml" }
+
+      candidates.distinct().forEach { descriptorUrl ->
         try {
-          val descriptorUrl = "http://$host:64321/DmsRmtDesc.xml"
-          trace("Scalar probe host=$host")
-          val xml = readText(descriptorUrl, 1_500, 2_500)
+          val host = URL(descriptorUrl).host
+          trace("Scalar probe descriptor=$descriptorUrl")
+          val xml = readText(network, descriptorUrl, 1_500, 2_500)
           if (!xml.contains("ScalarWebAPI", ignoreCase = true)) {
             throw SonyPtpException("Sony endpoint did not advertise ScalarWebAPI.")
           }
@@ -38,14 +53,22 @@ internal class SonyScalarWebApiTransport private constructor(
           val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL")
             ?: throw SonyPtpException("Sony ScalarWebAPI live-view URL is missing.")
           val modelName = extract(xml, "modelName") ?: "Sony Scalar Camera"
-          trace("Scalar discovered host=$host api=${URL(apiBaseUrl).port} live=${URL(liveViewUrl).port}")
+          val serviceUrls = extractServiceUrls(xml, apiBaseUrl)
+          trace(
+            "Scalar discovered host=$host api=${URL(apiBaseUrl).port} " +
+              "live=${URL(liveViewUrl).port} services=${serviceUrls.keys.sorted()}",
+          )
           return SonyScalarWebApiTransport(
-            Descriptor(host, descriptorUrl, apiBaseUrl, liveViewUrl, modelName),
+            Descriptor(host, descriptorUrl, apiBaseUrl, liveViewUrl, modelName, serviceUrls),
+            network,
             trace,
           )
         } catch (error: Throwable) {
           lastError = error
-          trace("Scalar probe unavailable host=$host reason=${error.message ?: error::class.java.simpleName}")
+          trace(
+            "Scalar probe unavailable descriptor=$descriptorUrl " +
+              "reason=${error.message ?: error::class.java.simpleName}",
+          )
         }
       }
       val detail = lastError?.message?.takeIf(String::isNotBlank)
@@ -55,13 +78,41 @@ internal class SonyScalarWebApiTransport private constructor(
       )
     }
 
+    /**
+     * Reads the `X_ScalarWebAPI_ServiceList` entries from the device descriptor.
+     *
+     * Each entry pairs a service type (`camera`, `system`, `avContent`, `guide`) with its
+     * action-list URL. Falls back to the advertised action-list base for any service the
+     * descriptor names without a URL.
+     */
+    private fun extractServiceUrls(xml: String, apiBaseUrl: String): Map<String, String> {
+      val entry = Regex(
+        "<(?:[^:>]+:)?X_ScalarWebAPI_Service>(.*?)</(?:[^:>]+:)?X_ScalarWebAPI_Service>",
+        RegexOption.DOT_MATCHES_ALL,
+      )
+      val services = linkedMapOf<String, String>()
+      entry.findAll(xml).forEach { match ->
+        val block = match.groupValues[1]
+        val type = extract(block, "X_ScalarWebAPI_ServiceType") ?: return@forEach
+        val url = extract(block, "X_ScalarWebAPI_ActionList_URL") ?: apiBaseUrl
+        services[type] = url.trimEnd('/') + "/" + type
+      }
+      if (services.isEmpty()) services["camera"] = apiBaseUrl.trimEnd('/') + "/camera"
+      return services
+    }
+
     private fun extract(xml: String, tag: String): String? {
       val pattern = Regex("<(?:[^:>]+:)?${Regex.escape(tag)}[^>]*>(.*?)</(?:[^:>]+:)?${Regex.escape(tag)}>", RegexOption.DOT_MATCHES_ALL)
       return pattern.find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
     }
 
-    private fun readText(url: String, connectTimeoutMs: Int, readTimeoutMs: Int): String {
-      val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+    private fun readText(
+      network: SonyCameraNetwork,
+      url: String,
+      connectTimeoutMs: Int,
+      readTimeoutMs: Int,
+    ): String {
+      val connection = network.open(url).apply {
         requestMethod = "GET"
         connectTimeout = connectTimeoutMs
         readTimeout = readTimeoutMs
@@ -83,14 +134,32 @@ internal class SonyScalarWebApiTransport private constructor(
   private var liveInput: BufferedInputStream? = null
 
   fun connect() {
+    refreshAvailableApis()
+
+    // Several Sony bodies expose almost no shooting APIs until the camera has been put
+    // into remote shooting mode. Without this the adapter can conclude "unsupported"
+    // against a camera that would have worked, so the API list is re-read afterwards.
+    if (availableApis.contains("startRecMode")) {
+      trace("Scalar entering remote shooting mode")
+      runCatching { call("startRecMode", timeoutMs = 10_000) }
+        .onFailure { trace("Scalar startRecMode failed: ${it.message ?: "unknown"}") }
+      Thread.sleep(500)
+      refreshAvailableApis()
+    }
+
+    if (availableApis.isEmpty()) throw SonyPtpException("Sony camera returned no available remote APIs.")
+    trace("Scalar ready APIs=${availableApis.size}")
+  }
+
+  private fun refreshAvailableApis() {
     val response = call("getAvailableApiList")
     availableApis = response.optJSONArray("result")
       ?.optJSONArray(0)
       ?.let { values -> (0 until values.length()).mapNotNull(values::optString).toSet() }
       .orEmpty()
-    if (availableApis.isEmpty()) throw SonyPtpException("Sony camera returned no available remote APIs.")
-    trace("Scalar ready APIs=${availableApis.size}")
   }
+
+  fun supports(method: String): Boolean = availableApis.contains(method)
 
   fun descriptor(): Descriptor = descriptor
 
@@ -101,13 +170,9 @@ internal class SonyScalarWebApiTransport private constructor(
     call("setTouchAFPosition", JSONArray().put(x * 100.0).put(y * 100.0))
     trace("Scalar touch focus requested x=${String.format(java.util.Locale.US, "%.1f", x * 100.0)} y=${String.format(java.util.Locale.US, "%.1f", y * 100.0)}")
     if (!availableApis.contains("getEvent")) return "started"
-    repeat(6) {
-      val event = call("getEvent", JSONArray().put(false), timeoutMs = 4_000).toString()
-      if (event.contains("Focused", ignoreCase = true)) return "focused"
-      if (event.contains("Failed", ignoreCase = true)) return "failed"
-      Thread.sleep(180)
-    }
-    return "started"
+    // "started" is a truthful outcome: the request was accepted but the camera did not
+    // report a result within the budget. It must not be reported as "focused".
+    return awaitFocusOutcome(2_000) ?: "started"
   }
 
   fun startLiveView() {
@@ -118,7 +183,7 @@ internal class SonyScalarWebApiTransport private constructor(
     } else {
       descriptor.liveViewUrl
     }
-    val connection = (URL(activeLiveViewUrl).openConnection() as HttpURLConnection).apply {
+    val connection = network.open(activeLiveViewUrl).apply {
       requestMethod = "GET"
       connectTimeout = 3_000
       readTimeout = 8_000
@@ -197,26 +262,48 @@ internal class SonyScalarWebApiTransport private constructor(
     }
   }
 
-  private fun waitForFocus() {
+  /**
+   * Waits for the camera to report a focus outcome, bounded by [timeoutMs].
+   *
+   * The first read is immediate so an already-focused camera is not made to wait for a
+   * change notification that will never arrive. Later reads use Sony's long-polling form,
+   * which returns as soon as the camera's state changes instead of the client sleeping
+   * blindly between snapshots. The read timeout is clamped to the remaining budget so the
+   * long poll can never outlive the deadline.
+   *
+   * Returns `"focused"`, `"failed"`, or `null` when the deadline passed without an outcome.
+   */
+  private fun awaitFocusOutcome(timeoutMs: Long): String? {
     if (!availableApis.contains("getEvent")) {
-      Thread.sleep(900)
-      return
+      Thread.sleep(minOf(timeoutMs, 900))
+      return null
     }
-    repeat(8) { attempt ->
-      val event = call("getEvent", JSONArray().put(false), timeoutMs = 4_000).toString()
+    val deadline = System.currentTimeMillis() + timeoutMs
+    var longPolling = false
+    while (true) {
+      val remaining = deadline - System.currentTimeMillis()
+      if (remaining <= 0) return null
+      val event = runCatching {
+        call(
+          "getEvent",
+          JSONArray().put(longPolling),
+          timeoutMs = remaining.coerceIn(500, timeoutMs).toInt(),
+        ).toString()
+      }.getOrNull() ?: return null
       when {
-        event.contains("Focused", ignoreCase = true) -> {
-          trace("Scalar autofocus ready attempt=${attempt + 1}")
-          return
-        }
-        event.contains("Failed", ignoreCase = true) -> {
-          trace("Scalar autofocus reported failure; shutter remains user-requested")
-          return
-        }
+        event.contains("Focused", ignoreCase = true) -> return "focused"
+        event.contains("Failed", ignoreCase = true) -> return "failed"
       }
-      Thread.sleep(250)
+      longPolling = true
     }
-    trace("Scalar autofocus status timed out; attempting requested shutter")
+  }
+
+  private fun waitForFocus() {
+    when (awaitFocusOutcome(3_000)) {
+      "focused" -> trace("Scalar autofocus ready")
+      "failed" -> trace("Scalar autofocus reported failure; shutter remains user-requested")
+      else -> trace("Scalar autofocus status timed out; attempting requested shutter")
+    }
   }
 
   fun stopLiveView() {
@@ -227,15 +314,25 @@ internal class SonyScalarWebApiTransport private constructor(
     closeLiveStream()
   }
 
-  private fun call(method: String, params: JSONArray = JSONArray(), timeoutMs: Int = 8_000): JSONObject {
-    val endpoint = descriptor.apiBaseUrl.trimEnd('/') + "/camera"
+  private fun call(
+    method: String,
+    params: JSONArray = JSONArray(),
+    timeoutMs: Int = 8_000,
+    service: String = "camera",
+  ): JSONObject {
+    val endpoint = descriptor.serviceUrls[service] ?: if (service == "camera") {
+      // Older descriptors advertise only the action-list base; camera is the default.
+      descriptor.apiBaseUrl.trimEnd('/') + "/camera"
+    } else {
+      throw SonyPtpException("This Sony camera does not advertise the $service service.")
+    }
     val body = JSONObject()
       .put("method", method)
       .put("params", params)
       .put("id", requestId.getAndIncrement())
       .put("version", "1.0")
       .toString()
-    val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+    val connection = network.open(endpoint).apply {
       requestMethod = "POST"
       connectTimeout = 3_000
       readTimeout = timeoutMs
@@ -263,7 +360,7 @@ internal class SonyScalarWebApiTransport private constructor(
   }
 
   private fun downloadJpeg(url: String): ByteArray {
-    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+    val connection = network.open(url).apply {
       requestMethod = "GET"
       connectTimeout = 3_000
       readTimeout = 20_000

@@ -4,13 +4,13 @@ plugins {
 }
 
 group = 'expo.modules.sonycamera'
-version = '0.1.0'
+version = '0.1.1'
 
 android {
   namespace "expo.modules.sonycamera"
   defaultConfig {
-    versionCode 1
-    versionName "0.1.0"
+    versionCode 101
+    versionName "0.1.1"
   }
   lintOptions {
     abortOnError false

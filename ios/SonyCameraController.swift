@@ -22,6 +22,61 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
   private var liveViewRequested = false
   private var streaming = false
   private var connecting = false
+  private var streamLoopRunning = false
+  /// Retained so a preview still can be produced without pushing every frame across the
+  /// JavaScript bridge, which at ~10 fps would dominate the bridge for no benefit.
+  private var lastFrameJpeg: Data?
+  private var diagnostics: [String] = []
+
+  private static let maxDiagnostics = 2_000
+  private static let maxPayloadDiagnostics = 200
+  private static let connectOptionKeys: Set<String> = [
+    "candidateId", "preferredProtocol", "preferredTransport",
+  ]
+
+  private static let timestampFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm:ss.SSS"
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    return formatter
+  }()
+
+  /// Appends one sanitised diagnostic entry.
+  ///
+  /// Entries record operation codes, sizes, and timings. They must never carry image
+  /// bytes, serial numbers, or network credentials.
+  private func trace(_ event: String) {
+    let now = Date()
+    stateLock.lock()
+    // DateFormatter is not thread-safe and trace() is called from the work queue, the
+    // stream loop, and the main queue. Formatting under the same lock that guards the
+    // buffer serialises both without needing a second lock.
+    diagnostics.append("\(Self.timestampFormatter.string(from: now)) \(event)")
+    if diagnostics.count > Self.maxDiagnostics {
+      diagnostics.removeFirst(diagnostics.count - Self.maxDiagnostics)
+    }
+    stateLock.unlock()
+  }
+
+  /// The full retained trace, not the truncated copy embedded in state payloads.
+  func diagnosticsSnapshot() -> [String: Any] {
+    stateLock.lock()
+    let entries = diagnostics
+    let connected = transport != nil
+    stateLock.unlock()
+    var payload: [String: Any] = ["entries": entries]
+    if connected {
+      payload["protocol"] = "sony_camera_control_ptp2"
+      payload["transport"] = "usb"
+    }
+    return payload
+  }
+
+  func clearDiagnostics() {
+    stateLock.lock()
+    diagnostics.removeAll()
+    stateLock.unlock()
+  }
 
   func start() {
     DispatchQueue.main.async { [weak self] in
@@ -63,7 +118,14 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     return statePayloadLocked()
   }
 
-  func connectBlocking() throws -> [String: Any] {
+  /// `options` carries the `SonyConnectOptions` contract. Candidate selection and
+  /// transport overrides are not implemented, so an unsupported override is recorded and
+  /// ignored rather than silently pretending it was honoured.
+  func connectBlocking(options: [String: Any] = [:]) throws -> [String: Any] {
+    let overrides = options.filter { Self.connectOptionKeys.contains($0.key) }
+    if !overrides.isEmpty {
+      trace("connect options ignored (candidate selection is not implemented): \(overrides)")
+    }
     guard let camera else {
       return updateState("disconnected", "No compatible Sony PTP camera is attached.")
     }
@@ -85,6 +147,9 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
       return
     }
     streaming = true
+    // Marked here rather than inside the loop: workQueue.async has not run yet, so a
+    // capture arriving in between must still wait for the loop that is about to start.
+    streamLoopRunning = true
     stateLock.unlock()
     _ = updateState("streaming", "Sony live view")
     workQueue.async { [weak self] in self?.streamLoop() }
@@ -109,6 +174,14 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     streaming = false
     stateLock.unlock()
 
+    // The stream loop owns the serial work queue until it observes streaming == false.
+    // Without this wait, workQueue.sync below simply queues behind it, and prepareLiveView
+    // can hold the queue for up to 50 iterations at a 5-second PTP timeout — so a capture
+    // could block for minutes instead of failing fast. Waiting explicitly bounds it.
+    if !waitForStreamLoopToExit(timeout: 6) {
+      throw SonyPtpFailure("Sony live view did not yield in time for capture.", retryable: true)
+    }
+
     do {
       let result = try workQueue.sync { () throws -> [String: Any] in
         guard let transport else { throw SonyPtpFailure("Sony camera is not connected.") }
@@ -127,8 +200,23 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     }
   }
 
+  /// Persists the most recent live-view frame and returns it as a photo payload.
+  ///
+  /// This is a preview-resolution still, not a full capture. It exists so an app can grab
+  /// what is on screen without triggering the shutter.
+  func capturePreviewFrameBlocking() throws -> [String: Any] {
+    stateLock.lock()
+    let jpeg = lastFrameJpeg
+    stateLock.unlock()
+    guard let jpeg else { throw SonyPtpFailure("No Sony live-view frame has been received yet.") }
+    return try persistCapturedJpeg(jpeg, notify: false)
+  }
+
   func disconnectBlocking(preserveLiveViewRequest: Bool = false) -> [String: Any] {
     stopLiveView(preserveRequest: preserveLiveViewRequest)
+    stateLock.lock()
+    lastFrameJpeg = nil
+    stateLock.unlock()
     let activeCamera = camera
     transport = nil
     if let activeCamera, activeCamera.hasOpenSession {
@@ -217,6 +305,11 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
   }
 
   private func streamLoop() {
+    defer {
+      stateLock.lock()
+      streamLoopRunning = false
+      stateLock.unlock()
+    }
     do {
       guard let transport else { throw SonyPtpFailure("Sony camera is not connected.") }
       try transport.prepareLiveView()
@@ -228,6 +321,9 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
         }
         if let jpeg = try transport.getLiveViewJpeg(), !jpeg.isEmpty {
           frameCount += 1
+          stateLock.lock()
+          lastFrameJpeg = jpeg
+          stateLock.unlock()
           notify { $0.sonyCameraController(self, didReceiveFrame: jpeg) }
         }
         let remainder = 0.1 - Date().timeIntervalSince(started)
@@ -247,6 +343,20 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     return streaming
   }
 
+  /// Blocks until the stream loop has released the work queue, or [timeout] elapses.
+  private func waitForStreamLoopToExit(timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      stateLock.lock()
+      let running = streamLoopRunning
+      stateLock.unlock()
+      if !running { return true }
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    trace("stream loop did not release the work queue within \(timeout)s")
+    return false
+  }
+
   private func currentState() -> String {
     stateLock.lock()
     defer { stateLock.unlock() }
@@ -261,7 +371,7 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     _ = updateState("error", error.localizedDescription)
   }
 
-  private func persistCapturedJpeg(_ jpeg: Data) throws -> [String: Any] {
+  private func persistCapturedJpeg(_ jpeg: Data, notify shouldNotify: Bool = true) throws -> [String: Any] {
     guard let image = UIImage(data: jpeg) else { throw SonyPtpFailure("Sony returned an unreadable image.") }
     let fileName = "sony-camera-\(Int(Date().timeIntervalSince1970 * 1000)).jpg"
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
@@ -273,12 +383,14 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
       "fileName": fileName,
       "mimeType": "image/jpeg",
     ]
-    notify { $0.sonyCameraController(self, didCapture: payload) }
+    if shouldNotify { notify { $0.sonyCameraController(self, didCapture: payload) } }
     return payload
   }
 
   @discardableResult
   private func updateState(_ next: String, _ nextMessage: String?) -> [String: Any] {
+    // Traced before the lock is taken: stateLock is not recursive and trace() locks it.
+    trace("state=\(next) message=\(nextMessage ?? "none")")
     stateLock.lock()
     state = next
     message = nextMessage
@@ -291,6 +403,7 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
   private func statePayloadLocked() -> [String: Any] {
     var payload: [String: Any] = ["state": state]
     if let message { payload["message"] = message }
+    payload["diagnostics"] = Array(diagnostics.suffix(Self.maxPayloadDiagnostics))
     if let camera { payload["device"] = devicePayload(camera) }
     return payload
   }

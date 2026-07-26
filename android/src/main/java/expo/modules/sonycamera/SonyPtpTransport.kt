@@ -39,6 +39,10 @@ internal class SonyPtpTransport private constructor(
     private const val MAX_USB_READ_BYTES = 64 * 1024
     private const val USB_TIMEOUT_MS = 5_000
 
+    /** Above this, prefer GetPartialObject over a single full-size GetObject allocation. */
+    private const val PARTIAL_TRANSFER_THRESHOLD_BYTES = 8L * 1024 * 1024
+    private const val PARTIAL_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
+
     fun open(manager: UsbManager, device: UsbDevice, trace: (String) -> Unit): SonyPtpTransport {
       val target = (0 until device.interfaceCount)
         .map(device::getInterface)
@@ -82,6 +86,10 @@ internal class SonyPtpTransport private constructor(
   private var bufferedInput = byteArrayOf()
   private var bufferedInputOffset = 0
 
+  /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
+  var deviceInfo: SonyDeviceInfo? = null
+    private set
+
   fun authenticate() {
     execute(0x1002, intArrayOf(1))
     sessionOpen = true
@@ -101,6 +109,20 @@ internal class SonyPtpTransport private constructor(
       throw SonyPtpException("The Sony camera reported an unsupported PTP protocol version.")
     }
     execute(0x9201, intArrayOf(3, 0, 0), expectsData = true)
+
+    // Read the camera's own capability lists. This must not be fatal: a body that
+    // refuses GetDeviceInfo can still stream and capture, it just cannot be described
+    // accurately, and an empty capability set is the honest result in that case.
+    deviceInfo = runCatching {
+      execute(0x1001, expectsData = true, allowBusy = true).data?.let(SonyPtpDeviceInfo::parse)
+    }.getOrNull()
+    deviceInfo?.let {
+      trace(
+        "Sony DeviceInfo model=${it.model} version=${it.deviceVersion} " +
+          "operations=${it.operationsSupported.size} properties=${it.devicePropertiesSupported.size} " +
+          "events=${it.eventsSupported.size}",
+      )
+    } ?: trace("Sony camera did not return DeviceInfo; capabilities will be reported as unknown")
   }
 
   fun prepareStillCapture() {
@@ -109,20 +131,21 @@ internal class SonyPtpTransport private constructor(
     runCatching { execute(0x9205, intArrayOf(0x5013), outgoingData = le32(1)) }
   }
 
+  /** Reads and parses every device property the camera currently reports. */
+  private fun readDeviceProperties(): List<SonyDeviceProperty> {
+    val result = execute(0x9209, expectsData = true, allowBusy = true)
+    return result.data?.let(SonyPtpProperties::parseAll).orEmpty()
+  }
+
   fun prepareLiveView() {
-    var lastStatus: ByteArray? = null
+    var lastStatus: Long? = null
     repeat(50) { attempt ->
-      val statusResult = execute(
-        0x9209,
-        expectsData = true,
-        allowBusy = true,
-      )
-      val status = statusResult.data?.let { findSonyScalarPropertyValue(it, PROPERTY_LIVE_VIEW_STATUS) }
-      if (attempt == 0 || attempt % 10 == 0 || !status.contentEqualsNullable(lastStatus)) {
-        trace("Sony live-view status D221=${status?.hexBytes() ?: "missing"}")
+      val status = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_LIVE_VIEW_STATUS)
+      if (attempt == 0 || attempt % 10 == 0 || status != lastStatus) {
+        trace("Sony live-view status D221=${status?.let { "0x%04X".format(it) } ?: "missing"}")
       }
       lastStatus = status
-      if ((status?.firstOrNull()?.toInt()?.and(0xFF) ?: 0) != 0) {
+      if ((status ?: 0L) != 0L) {
         try {
           execute(0x1008, intArrayOf(HANDLE_LIVE_VIEW), expectsData = true)
           return
@@ -133,7 +156,8 @@ internal class SonyPtpTransport private constructor(
       SystemClock.sleep(100)
     }
     throw SonyPtpException(
-      "Sony live view did not become ready (D221=${lastStatus?.hexBytes() ?: "missing"}). Set USB Connection to PC Remote.",
+      "Sony live view did not become ready (D221=${lastStatus?.let { "0x%04X".format(it) } ?: "missing"}). " +
+        "Set USB Connection to PC Remote.",
     )
   }
 
@@ -177,10 +201,7 @@ internal class SonyPtpTransport private constructor(
       // manual-focus lenses and back-button-focus setups may never report it.
       val focusDeadline = SystemClock.elapsedRealtime() + 1_000
       while (SystemClock.elapsedRealtime() < focusDeadline) {
-        val properties = execute(0x9209, expectsData = true, allowBusy = true)
-        val focus = properties.data
-          ?.let { findSonyScalarPropertyValue(it, PROPERTY_FOCUS_FOUND) }
-          ?.unsignedScalarValue()
+        val focus = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_FOCUS_FOUND)
         if (focus == 2L || focus == 3L) break
         SystemClock.sleep(50)
       }
@@ -204,10 +225,7 @@ internal class SonyPtpTransport private constructor(
   }
 
   fun pollCapturedJpeg(): ByteArray? {
-    val properties = execute(0x9209, expectsData = true, allowBusy = true)
-    val objectInMemory = properties.data
-      ?.let { findSonyScalarPropertyValue(it, PROPERTY_OBJECT_IN_MEMORY) }
-      ?.unsignedScalarValue()
+    val objectInMemory = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_OBJECT_IN_MEMORY)
     if (objectInMemory == null || objectInMemory < 0x8000) {
       capturedObjectConsumed = false
       return null
@@ -225,12 +243,22 @@ internal class SonyPtpTransport private constructor(
       acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
     )
     if (info.responseCode != RESPONSE_OK) return null
-    val result = execute(
-      0x1009,
-      intArrayOf(HANDLE_CAPTURED_IMAGE),
-      expectsData = true,
-      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
-    )
+    // ObjectInfo carries the compressed size at offset 8. Anything large is streamed with
+    // GetPartialObject rather than pulled into one allocation the size of the whole file.
+    val declaredSize = info.data?.takeIf { it.size >= 12 }?.u32(8) ?: 0L
+    val result = if (declaredSize > PARTIAL_TRANSFER_THRESHOLD_BYTES &&
+      deviceInfo?.supportsOperation(0x101B) == true
+    ) {
+      trace("captured object size=$declaredSize using GetPartialObject")
+      PtpResult(readObjectInChunks(HANDLE_CAPTURED_IMAGE, declaredSize), RESPONSE_OK)
+    } else {
+      execute(
+        0x1009,
+        intArrayOf(HANDLE_CAPTURED_IMAGE),
+        expectsData = true,
+        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
+      )
+    }
     if (result.responseCode != RESPONSE_OK) return null
     val jpeg = result.data?.let(SonyPtpCodec::parseSonyJpegData)
       ?: throw SonyPtpException(
@@ -238,6 +266,43 @@ internal class SonyPtpTransport private constructor(
       )
     capturedObjectConsumed = true
     return jpeg
+  }
+
+  /**
+   * Streams an object with `GetPartialObject` (0x101B) in bounded windows.
+   *
+   * `GetObject` requires a single allocation the size of the whole file. A 60 MB RAW is a
+   * 60 MB contiguous byte array, which fails on mid-range Android devices long before the
+   * 100 MB container ceiling is reached. Reading in windows keeps peak transient memory at
+   * one chunk; the assembled result still has to fit in memory, but the allocation pattern
+   * no longer needs a single contiguous block of the full size up front.
+   */
+  private fun readObjectInChunks(handle: Int, declaredSize: Long): ByteArray {
+    val output = java.io.ByteArrayOutputStream(minOf(declaredSize, 8L * 1024 * 1024).toInt())
+    var offset = 0L
+    while (offset < declaredSize) {
+      val window = minOf(PARTIAL_TRANSFER_CHUNK_BYTES.toLong(), declaredSize - offset).toInt()
+      val chunk = execute(
+        0x101B,
+        intArrayOf(handle, offset.toInt(), window),
+        expectsData = true,
+        allowBusy = true,
+      )
+      val bytes = chunk.data
+      if (bytes == null || bytes.isEmpty()) {
+        // A short or empty window means the camera stopped supplying data. Returning what
+        // arrived lets the JPEG validator reject it, rather than looping forever.
+        trace("partial transfer ended early at offset=$offset of $declaredSize")
+        break
+      }
+      output.write(bytes)
+      offset += bytes.size
+      if (bytes.size < window) {
+        trace("partial transfer short window at offset=$offset expected=$window got=${bytes.size}")
+      }
+    }
+    trace("partial transfer complete bytes=${output.size()} declared=$declaredSize")
+    return output.toByteArray()
   }
 
   fun close() {
@@ -395,40 +460,6 @@ private fun clearEndpointHalt(
 
 private data class PtpContainer(val type: Int, val code: Int, val transactionId: Int, val payload: ByteArray)
 private data class PtpResult(val data: ByteArray?, val responseCode: Int)
-
-private fun ByteArray?.contentEqualsNullable(other: ByteArray?): Boolean = when {
-  this == null -> other == null
-  other == null -> false
-  else -> contentEquals(other)
-}
-
-private fun ByteArray.hexBytes(): String = joinToString(" ") { byte -> "%02X".format(byte.toInt() and 0xFF) }
-
-private fun ByteArray.unsignedScalarValue(): Long? = when (size) {
-  1 -> this[0].toLong() and 0xFF
-  2 -> u16(0).toLong()
-  4 -> u32(0)
-  else -> null
-}
-
-private fun findSonyScalarPropertyValue(data: ByteArray, propertyCode: Int): ByteArray? {
-  if (data.size < 16) return null
-  for (offset in 8..data.size - 8) {
-    if (data.u16(offset) != propertyCode) continue
-    val dataType = data.u16(offset + 2)
-    val valueSize = when (dataType) {
-      0x0001, 0x0002 -> 1
-      0x0003, 0x0004 -> 2
-      0x0005, 0x0006 -> 4
-      0x0007, 0x0008 -> 8
-      else -> continue
-    }
-    val currentValueOffset = offset + 6 + valueSize
-    if (currentValueOffset + valueSize > data.size) return null
-    return data.copyOfRange(currentValueOffset, currentValueOffset + valueSize)
-  }
-  return null
-}
 
 internal object SonyPtpCodec {
   fun buildContainer(type: Int, code: Int, transactionId: Int, payload: ByteArray): ByteArray =

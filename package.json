@@ -12,8 +12,10 @@
     "format:check": "prettier --check src example app.plugin.js",
     "test": "node internal/module_scripts/test.js",
     "test:watch": "node internal/module_scripts/test.js --watch",
-    "prepublishOnly": "npm run build && npm run lint && npm test",
-    "prepare": "node internal/module_scripts/prepare.js",
+    "sync-version": "node internal/module_scripts/sync-version.js",
+    "sync-version:check": "node internal/module_scripts/sync-version.js --check",
+    "prepublishOnly": "npm run sync-version && npm run build && npm run lint && npm test",
+    "prepare": "node internal/module_scripts/sync-version.js && node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js",
     "open:android": "node internal/module_scripts/open-android.js"
   },

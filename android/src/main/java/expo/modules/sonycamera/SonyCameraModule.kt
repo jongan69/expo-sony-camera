@@ -31,11 +31,20 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
     }
 
     Function("getState") { controller.statePayload() }
-    AsyncFunction("connect") { controller.connectBlocking() }
+
+    // The options argument is declared in TypeScript, so it has to be accepted here even
+    // though candidate selection is not implemented yet. Expo validates argument count,
+    // so a zero-argument definition made the documented signature throw at runtime.
+    AsyncFunction("connect") { options: Map<String, Any?>? ->
+      controller.connectBlocking(options.orEmpty())
+    }
     AsyncFunction("disconnect") { controller.disconnectBlocking() }
+    Function("getDiagnostics") { controller.diagnosticsSnapshot() }
+    Function("clearDiagnostics") { controller.clearDiagnostics() }
     AsyncFunction("startLiveView") { controller.startLiveView(); controller.statePayload() }
     AsyncFunction("stopLiveView") { controller.stopLiveView(); controller.statePayload() }
     AsyncFunction("capturePhoto") { controller.capturePhotoBlocking() }
+    AsyncFunction("capturePreviewFrame") { controller.capturePreviewFrameBlocking() }
     AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
       controller.focusAtBlocking(x, y, viewWidth, viewHeight)
     }

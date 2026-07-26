@@ -60,18 +60,22 @@ final class SonyPtpTransport {
     _ = try? execute(operation: 0x9205, params: [0x5013], outgoingData: Data.littleEndian32(1))
   }
 
+  /// Reads and parses every device property the camera currently reports.
+  private func readDeviceProperties() throws -> [SonyDeviceProperty] {
+    let result = try execute(operation: 0x9209, expectsData: true, allowBusy: true)
+    guard let data = result.data else { return [] }
+    return SonyPtpProperties.parseAll(data)
+  }
+
   func prepareLiveView() throws {
-    var lastStatus: Data?
+    var lastStatus: Int64?
     for _ in 0..<50 {
-      let statusResult = try execute(
-        operation: 0x9209,
-        expectsData: true,
-        allowBusy: true
+      let status = SonyPtpProperties.scalar(
+        try readDeviceProperties(),
+        code: UInt16(Self.liveViewStatusProperty)
       )
-      lastStatus = statusResult.data.flatMap {
-        Self.sonyScalarPropertyValue(in: $0, propertyCode: UInt16(Self.liveViewStatusProperty))
-      }
-      if let status = lastStatus?.first, status != 0 {
+      lastStatus = status
+      if let status, status != 0 {
         do {
           _ = try execute(operation: 0x1008, params: [Self.liveViewHandle], expectsData: true)
           return
@@ -81,7 +85,7 @@ final class SonyPtpTransport {
       }
       Thread.sleep(forTimeInterval: 0.1)
     }
-    let status = lastStatus?.map { String(format: "%02X", $0) }.joined(separator: " ") ?? "missing"
+    let status = lastStatus.map { String(format: "0x%04X", $0) } ?? "missing"
     throw SonyPtpFailure("Sony live view did not become ready (D221=\(status)). Set USB Connection to PC Remote.")
   }
 
@@ -115,10 +119,7 @@ final class SonyPtpTransport {
     }
     let focusDeadline = Date().addingTimeInterval(1)
     while Date() < focusDeadline {
-      let properties = try execute(operation: 0x9209, expectsData: true, allowBusy: true)
-      let focus = properties.data
-        .flatMap { Self.sonyScalarPropertyValue(in: $0, propertyCode: Self.focusFoundProperty) }
-        .flatMap(\.unsignedScalarValue)
+      let focus = SonyPtpProperties.scalar(try readDeviceProperties(), code: Self.focusFoundProperty)
       if focus == 2 || focus == 3 { break }
       Thread.sleep(forTimeInterval: 0.05)
     }
@@ -138,10 +139,10 @@ final class SonyPtpTransport {
   }
 
   func pollCapturedJpeg() throws -> Data? {
-    let properties = try execute(operation: 0x9209, expectsData: true, allowBusy: true)
-    let objectInMemory = properties.data
-      .flatMap { Self.sonyScalarPropertyValue(in: $0, propertyCode: Self.objectInMemoryProperty) }
-      .flatMap(\.unsignedScalarValue)
+    let objectInMemory = SonyPtpProperties.scalar(
+      try readDeviceProperties(),
+      code: Self.objectInMemoryProperty
+    )
     guard let objectInMemory, objectInMemory >= 0x8000 else {
       capturedObjectConsumed = false
       return nil
@@ -242,23 +243,6 @@ final class SonyPtpTransport {
     return data
   }
 
-  private static func sonyScalarPropertyValue(in data: Data, propertyCode: UInt16) -> Data? {
-    guard data.count >= 16 else { return nil }
-    for offset in 8...(data.count - 8) where data.uint16LE(at: offset) == propertyCode {
-      let valueSize: Int
-      switch data.uint16LE(at: offset + 2) {
-      case 0x0001, 0x0002: valueSize = 1
-      case 0x0003, 0x0004: valueSize = 2
-      case 0x0005, 0x0006: valueSize = 4
-      case 0x0007, 0x0008: valueSize = 8
-      default: continue
-      }
-      let currentValueOffset = offset + 6 + valueSize
-      guard currentValueOffset + valueSize <= data.count else { return nil }
-      return data.subdata(in: currentValueOffset..<(currentValueOffset + valueSize))
-    }
-    return nil
-  }
 }
 
 extension Data {
@@ -320,15 +304,6 @@ extension Data {
       }
     }
     return subdata(in: jpegStart..<jpegEnd)
-  }
-
-  fileprivate var unsignedScalarValue: UInt64? {
-    switch count {
-    case 1: return UInt64(self[0])
-    case 2: return UInt64(uint16LE(at: 0))
-    case 4: return UInt64(uint32LE(at: 0))
-    default: return nil
-    }
   }
 
   private func jpegStartIndex(from searchStart: Int) -> Int? {

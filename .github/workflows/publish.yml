@@ -2,9 +2,19 @@ name: Publish package
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Version bump to apply before publishing
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -12,10 +22,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+
       - run: npm ci
+
+      # Verify before bumping, so a broken build never consumes a version number.
+      - run: npm run build
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # `npm version` bumps package.json, then `prepare` runs sync-version, which
+      # propagates the new version into the podspec and build.gradle. -a folds those
+      # files into the release commit npm creates.
+      - name: Bump version
+        id: bump
+        run: |
+          VERSION=$(npm version "${{ inputs.release }}" -m "Release v%s" -a)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify native versions were synced
+        run: npm run sync-version:check
+
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Push only after a successful publish, so a failed release leaves no tag behind.
+      - name: Push release commit and tag
+        run: git push --follow-tags origin HEAD:${{ github.ref_name }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.bump.outputs.version }}" --generate-notes

@@ -31,15 +31,17 @@ Those are separate claims. No row is “certified” in `0.1.x`.
 | Movie recording               | Not implemented                         | Camera may advertise APIs, but module does not expose them | Not implemented                                 | Later roadmap                        |
 | Media browser/transfer        | Captured JPEG only                      | Captured JPEG only                                         | Captured JPEG only                              | Later roadmap                        |
 | Camera protocol events        | Not consumed                            | `getEvent` used only for bounded focus checks              | Delegate exists but PTP events are not consumed | Required for PTP3                    |
-| Persistent diagnostics        | Android state payload and Logcat        | Android state payload and Logcat                           | Not exposed publicly                            | Cross-platform diagnostics planned   |
+| Persistent diagnostics        | `getDiagnostics()`, state payload, Logcat | `getDiagnostics()`, state payload, Logcat                | `getDiagnostics()` and state payload, in-memory | Cross-platform diagnostics planned   |
 | Reconnect                     | Attach flow preserves live-view intent  | Single-flight bounded reconnect                            | Re-add preserves live-view intent               | Required before support claim        |
 
 ## Important API qualifications
 
 - `onStateChanged`, `onDeviceAttached`, and `onPhotoCaptured` are module events. They do
   not mean a PTP event channel is implemented.
-- The exported candidate, capability, property, preset, diagnostics, and connect-option
-  types reserve a future contract. Most are not callable native features in `0.1.x`.
+- The exported candidate, capability, property, and preset types reserve a future
+  contract and are not callable native features yet.
+- `connect(options)` accepts the connect-option argument on both platforms but ignores
+  it; candidate selection and transport overrides are not implemented.
 - `focusAt` is Android-only at runtime and returns `unsupported` unless ScalarWebAPI
   advertises coordinate touch focus.
 - The native view receives JPEGs directly from the controller; preview frames are not
