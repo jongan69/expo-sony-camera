@@ -3,3 +3,4 @@
 export { default } from './SonyCameraModule';
 export { default as SonyCameraView } from './SonyCameraView';
 export * from './SonyCamera.types';
+export * from './camera-core';

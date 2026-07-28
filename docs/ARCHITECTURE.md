@@ -1,5 +1,9 @@
 # Architecture
 
+The vendor-neutral Camera Core compatibility boundary is documented in
+[CAMERA_CORE_ADAPTER.md](./CAMERA_CORE_ADAPTER.md). It wraps this package's
+existing native controllers; it does not replace or duplicate their transports.
+
 `expo-sony-camera` is an Expo Modules API package. The package owns the native
 camera connection lifecycle and exposes a small JavaScript surface. The example
 app is a consumer and test harness; it is not part of the published NPM payload.

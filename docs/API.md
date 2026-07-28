@@ -1,5 +1,9 @@
 # Public API
 
+The additive Camera Core compatibility API is documented in
+[CAMERA_CORE_ADAPTER.md](./CAMERA_CORE_ADAPTER.md). Existing direct module APIs
+remain available during the compatibility migration.
+
 This document describes the callable API. Some exported TypeScript types reserve future
 capability, property, preset, and candidate-selection APIs; type availability does not
 mean a corresponding native function is implemented.

@@ -119,6 +119,7 @@ public runtime features in `0.1.x`.
 
 - [Public API](./docs/API.md)
 - [Architecture](./docs/ARCHITECTURE.md)
+- [Camera Core adapter and migration](./docs/CAMERA_CORE_ADAPTER.md)
 - [Protocol findings and design constraints](./docs/PROTOCOL_FINDINGS.md)
 - [Support matrix and evidence levels](./docs/SUPPORT_MATRIX.md)
 - [Capability and PTP3 roadmap](./docs/ROADMAP.md)
