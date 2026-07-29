@@ -4,15 +4,20 @@ plugins {
 }
 
 group = 'expo.modules.sonycamera'
-version = '0.2.0'
+version = '0.2.1'
 
 android {
   namespace "expo.modules.sonycamera"
   defaultConfig {
-    versionCode 200
-    versionName "0.2.0"
+    versionCode 201
+    versionName "0.2.1"
   }
   lintOptions {
     abortOnError false
   }
+}
+
+dependencies {
+  implementation files('libs/UVCAndroid-sony-bulk-patched.aar')
+  testImplementation 'junit:junit:4.13.2'
 }

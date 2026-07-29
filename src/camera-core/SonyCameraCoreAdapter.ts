@@ -1,4 +1,3 @@
-import SonyCamera from '../SonyCameraModule';
 import type {
   SonyCameraCapabilities,
   SonyCameraInfo,
@@ -7,6 +6,7 @@ import type {
   SonyFocusResult,
   SonyPhoto,
 } from '../SonyCamera.types';
+import SonyCamera from '../SonyCameraModule';
 import type {
   CameraCoreCandidate,
   CameraCoreCapabilities,
@@ -301,7 +301,9 @@ class SonyCameraCoreSession implements CameraCorePluginSession {
       native.addListener('onDeviceAttached', (nextState) => {
         this.emit('camera.device.attached.v1', {
           state: mapSonyState(nextState.state),
-          candidateId: nextState.device ? candidateId(nextState.device) : this.candidate.candidateId,
+          candidateId: nextState.device
+            ? candidateId(nextState.device)
+            : this.candidate.candidateId,
         });
       }),
     ];
@@ -319,7 +321,10 @@ class SonyCameraCoreSession implements CameraCorePluginSession {
 
   async capabilities(): Promise<CameraCoreCapabilities> {
     const state = this.native.getState();
-    return mapSonyCapabilities(state.device?.capabilities, typeof this.native.focusAt === 'function');
+    return mapSonyCapabilities(
+      state.device?.capabilities,
+      typeof this.native.focusAt === 'function'
+    );
   }
 
   subscribe(listener: CameraCoreEventListener): CameraCoreUnsubscribe {
@@ -362,7 +367,12 @@ class SonyCameraCoreSession implements CameraCorePluginSession {
         }
         case 'focus': {
           if (!this.native.focusAt) return unsupported(command);
-          if (command.point.x < 0 || command.point.x > 1 || command.point.y < 0 || command.point.y > 1) {
+          if (
+            command.point.x < 0 ||
+            command.point.x > 1 ||
+            command.point.y < 0 ||
+            command.point.y > 1
+          ) {
             return {
               ok: false,
               commandType: command.type,
@@ -527,10 +537,11 @@ export class SonyCameraCorePlugin implements CameraCorePlugin {
     }
     if (this.activeSession) return this.activeSession;
 
-    // Candidate selection is not yet honored by the native bridge. The request
-    // is accepted for Camera Core compatibility, while native auto-selection
-    // remains authoritative during the migration window.
-    const state = await this.native.connect();
+    // Pass through camera-core candidate intent so platforms that support transport/protocol
+    // hints can honor it (Android currently honors candidate preference during connect).
+    const state = await this.native.connect(
+      request.candidateId ? { candidateId: request.candidateId } : undefined
+    );
     if (!state.device) {
       throw new Error('Sony camera connected without a device descriptor.');
     }

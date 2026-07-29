@@ -7,4 +7,7 @@
        SonyCameraController.isSonyPtp still requires interface class 6, so this only
        widens which attach events Android delivers to the app. -->
   <usb-device vendor-id="1356" class="6" />
+  <!-- Sony USB Streaming exposes a USB Video Class interface. Runtime discovery still
+       verifies that Android publishes an external Camera2 device before opening it. -->
+  <usb-device vendor-id="1356" class="14" />
 </resources>

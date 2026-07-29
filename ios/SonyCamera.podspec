@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name           = 'SonyCamera'
-  s.version        = '0.2.0'
+  s.version        = '0.2.1'
   s.summary        = 'Expo native module for Sony camera live view and remote capture'
   s.description    = 'ImageCaptureCore bridge for Sony camera live view and remote still capture.'
   s.author         = 'Jonathan Gan'
@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'ImageCaptureCore', 'UIKit'
+  s.frameworks = 'AVFoundation', 'CoreImage', 'ImageCaptureCore', 'UIKit'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

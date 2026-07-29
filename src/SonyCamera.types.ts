@@ -163,3 +163,65 @@ export type SonyCameraViewProps = {
   active?: boolean;
   style?: StyleProp<ViewStyle>;
 };
+
+export type SonyUsbStreamingStateName =
+  'unsupported' | 'disconnected' | 'permission_required' | 'ready' | 'streaming' | 'error';
+
+export type SonyUsbStreamingFormat = {
+  width: number;
+  height: number;
+  maxFrameRate: number;
+};
+
+export type SonyUsbStreamingDevice = {
+  name: string;
+  protocol: 'uvc';
+  transport: 'usb_uvc';
+  formats: SonyUsbStreamingFormat[];
+  activeFormat?: SonyUsbStreamingFormat;
+};
+
+export type SonyUsbStreamingCapabilities = {
+  liveView: boolean;
+  previewFrameCapture: boolean;
+  audio: boolean;
+  remoteShutter: false;
+  cameraProperties: false;
+};
+
+export type SonyUsbStreamingState = {
+  state: SonyUsbStreamingStateName;
+  message?: string;
+  device?: SonyUsbStreamingDevice;
+  /** iOS capability payload. Android telemetry fields below are authoritative there. */
+  capabilities?: SonyUsbStreamingCapabilities;
+  diagnostics?: string[];
+  deviceName?: string | null;
+  width?: number;
+  height?: number;
+  fps?: number;
+  frameCount?: number;
+  maximumFrameGapMs?: number;
+  pixelFormat?: string | null;
+  sourceFpsMin?: number | null;
+  sourceFpsMax?: number | null;
+  audioAvailable?: boolean;
+  audioDevices?: string[];
+  streamReady?: boolean;
+  transport?: 'usb_uvc' | 'android_libuvc_direct' | 'android_camera2_uvc';
+};
+
+export type SonyUsbStreamingDiagnostics = {
+  entries: string[];
+  protocol: 'uvc';
+  transport: 'usb_uvc';
+};
+
+export type SonyUsbStreamingModuleEvents = {
+  onStateChanged: (state: SonyUsbStreamingState) => void;
+};
+
+export type SonyUsbStreamingViewProps = {
+  active?: boolean;
+  style?: StyleProp<ViewStyle>;
+};

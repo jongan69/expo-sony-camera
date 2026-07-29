@@ -3,6 +3,8 @@
 Build a mobile app that talks to a Sony camera with Expo and React Native. This Expo
 native module provides Sony camera control, tethered shooting, remote shutter capture,
 native JPEG live view, and captured-image transfer for Android and iOS apps.
+It also provides direct Android USB Video Class (UVC) preview for cameras such as the
+Sony a6700 in **USB Streaming** mode.
 
 It is designed for developers building a Sony Alpha camera app, Sony remote-camera
 workflow, mobile product-photography tool, camera monitor, remote shutter, or camera
@@ -13,8 +15,11 @@ Sony ScalarWebAPI where the active camera advertises those capabilities.
 This package is experimental (`0.x`). It contains native protocol work for:
 
 - Android USB Camera Control PTP2
+- Android direct USB UVC/MJPEG streaming
 - Android Sony ScalarWebAPI over Wi-Fi Direct
 - iOS wired Camera Control PTP2 through ImageCaptureCore
+- iOS external-camera streaming through AVFoundation (source implementation; physical
+  a6700 certification pending)
 
 Tested protocol terminology and camera families include Sony A7 III (`ILCE-7M3`), Sony
 a6700 (`ILCE-6700`), Camera Control PTP2, PTP/IP, PTP3, ScalarWebAPI, USB PTP camera,
@@ -53,8 +58,9 @@ This package is for an Expo or React Native developer who needs to:
 - build a Sony Alpha tethered-shooting, remote-monitor, product-photography, or camera
   control app with a reusable native module.
 
-It is not a UVC webcam wrapper, a browser camera API, or a promise of universal Sony
-camera compatibility.
+It is not a browser camera API or a promise of universal Sony camera compatibility.
+UVC streaming and remote camera control are separate module surfaces because USB
+Streaming mode does not expose the PTP remote-control interface.
 
 ## Installation
 
@@ -105,6 +111,19 @@ await SonyCamera?.disconnect();
 <SonyCameraView active style={{ flex: 1 }} />;
 ```
 
+Direct USB streaming uses the separate UVC surface:
+
+```tsx
+import { SonyUsbStreaming, SonyUsbStreamingView } from 'expo-sony-camera';
+
+await SonyUsbStreaming?.startStreaming();
+<SonyUsbStreamingView active style={{ flex: 1 }} />;
+```
+
+On a Sony a6700, select `USB Connection Mode > USB Streaming`, set `USB Power Supply`
+to `Off`, connect directly with a data-capable USB-C cable, and wait for the camera to
+show `Streaming: Output`. See [USB streaming](./docs/USB_STREAMING.md).
+
 The module emits `onStateChanged`, `onDeviceAttached`, and `onPhotoCaptured` events.
 On web, the module is unavailable and the view renders nothing.
 
@@ -112,8 +131,9 @@ On web, the module is unavailable and the view renders nothing.
 only when the active ScalarWebAPI camera advertises coordinate touch focus. Callers
 must handle `unsupported`; the module does not pretend that center-focus is coordinate
 focus. `SonyConnectOptions` and the candidate/capability types reserve the future
-protocol-selection contract, but candidate enumeration and transport overrides are not
-public runtime features in `0.1.x`.
+protocol-selection contract. Android now applies transport/protocol preference hints
+when they are requested; iOS remains USB PTP2-only in this release and rejects
+unsupported transport/protocol preferences explicitly.
 
 ## Documentation
 
@@ -125,6 +145,8 @@ public runtime features in `0.1.x`.
 - [Capability and PTP3 roadmap](./docs/ROADMAP.md)
 - [Physical hardware validation](./docs/HARDWARE_VALIDATION.md)
 - [Releasing to NPM](./docs/RELEASING.md)
+- [USB streaming setup, architecture, and evidence](./docs/USB_STREAMING.md)
+- [Production readiness gates](./docs/PRODUCTION_READINESS.md)
 
 ## Camera setup
 
@@ -162,7 +184,11 @@ physical-device tests and are not claimed by the automated suite.
 - iOS wireless transports are not implemented yet.
 - Camera property control, movie control, and media browsing are not part of the first
   public API.
-- PTP live view is a sequence of JPEG object transfers, not a UVC webcam stream.
+- PTP live view and UVC streaming are independent paths. PTP provides camera control;
+  UVC provides a continuous video feed while the camera is in USB Streaming mode.
+- Android UVC is physically proven on one arm64 Samsung/a6700 combination. Other ABIs,
+  phones, firmware versions, USB audio capture, encoding, and network publishing remain
+  explicit release gates.
 - The module cannot add a control that a camera/firmware/mode does not advertise.
 - The module does not bypass pairing, network permissions, camera licensing, or Sony's
   per-model command compatibility.

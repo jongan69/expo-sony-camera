@@ -7,6 +7,7 @@ module.exports = function withSonyCamera(config) {
   config = withInfoPlist(config, (configWithInfoPlist) => {
     configWithInfoPlist.modResults.NSCameraUsageDescription ??=
       'This app uses an attached camera for live view and product photography.';
+    configWithInfoPlist.modResults.NSCameraUseExternalDeviceType ??= true;
     configWithInfoPlist.modResults.NSLocalNetworkUsageDescription ??=
       'This app discovers and controls Sony cameras connected to your local Wi-Fi network.';
     return configWithInfoPlist;

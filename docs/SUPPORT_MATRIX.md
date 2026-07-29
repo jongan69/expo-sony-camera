@@ -14,6 +14,8 @@ Those are separate claims. No row is “certified” in `0.1.x`.
 | iOS      | ScalarWebAPI over Wi-Fi                            | Not implemented | Android/desktop behavior can inform fixtures only                 | Unsupported in `0.1.x`                              |
 | iOS      | Camera Control PTP3 over PTP/IP                    | Not implemented | Protocol probe can inform fixtures only                           | Roadmap only                                        |
 | Web      | Native camera control                              | Fallback only   | Web tests                                                         | Unavailable by design                               |
+| Android  | Direct USB UVC/MJPEG streaming                     | Implemented     | Physical a6700/Samsung Release run at 1280x720/30                  | Physically proven on the named arm64 matrix only    |
+| iOS      | External USB camera through AVFoundation           | Implemented     | Source path only; no completed a6700/iPhone run                    | Experimental and not hardware-certified             |
 
 ## Feature matrix
 
@@ -40,14 +42,33 @@ Those are separate claims. No row is “certified” in `0.1.x`.
   not mean a PTP event channel is implemented.
 - The exported candidate, capability, property, and preset types reserve a future
   contract and are not callable native features yet.
-- `connect(options)` accepts the connect-option argument on both platforms but ignores
-  it; candidate selection and transport overrides are not implemented.
+- `connect(options)` accepts the connect-option argument on both platforms. Android applies
+  connect hints (candidate/protocol/transport) where supported; iOS supports only USB PTP2
+  and rejects unsupported transport/protocol overrides.
 - `focusAt` is Android-only at runtime and returns `unsupported` unless ScalarWebAPI
   advertises coordinate touch focus.
 - The native view receives JPEGs directly from the controller; preview frames are not
   emitted through JavaScript.
 
 ## Inherited bench evidence
+
+## Direct USB streaming evidence (2026-07-29)
+
+- Camera: Sony a6700 (`ILCE-6700`) in USB Streaming mode.
+- Host: Samsung `SM-A166U1`, Android 16/API 36, arm64 Release build.
+- Direct USB-C connection; Sony USB Power Supply set to Off.
+- Negotiated `1280x720`, MJPEG, 30 FPS.
+- Received 1,725 frames in approximately 57 seconds before Android reported a physical
+  USB detach; observed cadence was approximately 28.88-30.51 FPS with a 69 ms maximum
+  frame gap.
+- The native preview visibly rendered the camera feed. The process did not crash, and
+  detach closed the UVC device cleanly.
+- Android discovered `USB-Audio - ILCE-6700`; PCM capture and stream muxing were not
+  tested or implemented.
+
+This is evidence level 3 for one Android hardware combination. It is not evidence level
+5 because sustained soak, lifecycle, failure recovery, multiple phones, multiple ABIs,
+audio capture, and published-package installation remain incomplete.
 
 The extraction began from ListingOS camera work that observed:
 

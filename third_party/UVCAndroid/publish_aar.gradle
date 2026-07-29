@@ -1,0 +1,32 @@
+mavenPublishing {
+
+    coordinates(publishedGroupId, artifact, libraryVersion)
+    publishToMavenCentral()
+    signAllPublications()
+
+    pom {
+        name = artifact
+        description = libraryDescription
+        url = siteUrl
+        licenses {
+            license {
+                name = licenseName
+                url = licenseUrl
+                distribution = licenseUrl
+            }
+        }
+        developers {
+            developer {
+                id = developerId
+                name = developerName
+                email = developerEmail
+                url = siteUrl
+            }
+        }
+        scm {
+            url = siteUrl
+            connection = gitUrl
+            developerConnection = gitUrl
+        }
+    }
+}

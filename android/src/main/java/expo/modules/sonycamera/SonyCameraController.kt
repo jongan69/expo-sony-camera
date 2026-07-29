@@ -76,6 +76,43 @@ internal class SonyCameraController(private val context: Context) {
   // JavaScript bridge, which at ~10 fps would dominate the bridge for no benefit.
   @Volatile private var lastFrameJpeg: ByteArray? = null
 
+  private data class ConnectPreference(
+    val protocol: String?,
+    val transport: String?,
+    val candidateId: String?,
+  ) {
+    val prefersUsb: Boolean = protocol == "sony_camera_control_ptp2" || transport == "usb"
+    val prefersScalar: Boolean = protocol == "sony_scalar_webapi_v1" || transport == "scalar_http"
+    val prefersPtpIp: Boolean = protocol == "sony_camera_control_ptp3" || transport == "ptp_ip"
+  }
+
+  private fun parseConnectPreference(options: Map<String, Any?>): ConnectPreference? {
+    val normalizedProtocol = normalizeProtocol(options["preferredProtocol"] as? String)
+    val normalizedTransport = normalizeTransport(options["preferredTransport"] as? String)
+    val candidateId = options["candidateId"] as? String
+    val parsedCandidate = candidateId?.let(::parseCandidate)
+    val protocol = normalizedProtocol ?: parsedCandidate?.first
+    val transport = normalizedTransport ?: parsedCandidate?.second
+    if (protocol == null && transport == null) return null
+    return ConnectPreference(protocol, transport, candidateId)
+  }
+
+  private fun parseCandidate(candidateId: String): Pair<String?, String?> {
+    val parts = candidateId.split(':')
+    if (parts.size < 3) return null to null
+    return normalizeProtocol(parts[parts.size - 2]) to normalizeTransport(parts[parts.size - 1])
+  }
+
+  private fun normalizeProtocol(value: String?): String? = when (value) {
+    "sony_camera_control_ptp2", "sony_camera_control_ptp3", "sony_scalar_webapi_v1" -> value
+    else -> null
+  }
+
+  private fun normalizeTransport(value: String?): String? = when (value) {
+    "usb", "ptp_ip", "scalar_http" -> value
+    else -> null
+  }
+
   private val usbReceiver = object : BroadcastReceiver() {
     override fun onReceive(receiverContext: Context, intent: Intent) {
       trace("broadcast action=${intent.action}")
@@ -188,17 +225,28 @@ internal class SonyCameraController(private val context: Context) {
   fun statePayload(): Map<String, Any?> = payloadFor(state, message, device)
 
   /**
-   * [options] carries the `SonyConnectOptions` contract. Candidate selection and
-   * transport overrides are not implemented, so an unsupported override is recorded and
-   * ignored rather than silently pretending it was honoured.
+   * [options] carries the `SonyConnectOptions` contract. A recognized protocol/transport hint
+   * is honored when available. Unsupported requests fail fast.
    */
   fun connectBlocking(options: Map<String, Any?> = emptyMap()): Map<String, Any?> {
-    val overrides = options.filterKeys { it in CONNECT_OPTION_KEYS }.filterValues { it != null }
-    if (overrides.isNotEmpty()) {
-      trace("connect options ignored (candidate selection is not implemented): $overrides")
+    val preference = parseConnectPreference(options)
+    if (preference != null) {
+      trace("connect options resolved protocol=${preference.protocol} transport=${preference.transport} candidate=${preference.candidateId ?: "none"}")
+      if (preference.prefersPtpIp) {
+        updateState("error", "Sony Camera Control PTP/IP (PTP3) is not implemented in this release.")
+        return statePayload()
+      }
+      if (preference.prefersScalar) {
+        enqueueScalarConnect()
+        return statePayload()
+      }
     }
     val attached = device ?: findSonyPtpDevice()
     if (attached == null) {
+      if (preference?.prefersUsb == true) {
+        updateState("disconnected", "USB transport was requested, but no compatible Sony USB camera is attached.")
+        return statePayload()
+      }
       enqueueScalarConnect()
       return statePayload()
     }

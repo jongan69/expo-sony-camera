@@ -13,3 +13,5 @@ __tests__
 /android/src/test/
 /android/build/
 /example/
+/third_party/UVCAndroid/.gradle/
+/third_party/UVCAndroid/libuvccamera/build/

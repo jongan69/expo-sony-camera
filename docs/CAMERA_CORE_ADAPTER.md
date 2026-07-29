@@ -48,7 +48,7 @@ protocol capabilities that do not have a public native bridge:
 - Movie start and stop
 - Camera media browsing and arbitrary media download
 - Battery, storage, and temperature health APIs
-- Candidate override and transport selection
+- Candidate override and transport selection (platform-dependent; Android can honor transport/protocol hints)
 - Continuous sampled-frame events
 - Mid-command `AbortSignal` cancellation
 - iOS coordinate focus

@@ -10,6 +10,26 @@ mean a corresponding native function is implemented.
 
 ## Module availability
 
+`SonyCamera` is the PTP/Scalar remote-control surface. `SonyUsbStreaming` is the UVC
+video surface. A camera generally exposes one USB personality at a time, so applications
+must not expect remote shutter control while the a6700 is in USB Streaming mode.
+
+## `SonyUsbStreaming`
+
+| Method                  | Android | iOS | Notes |
+| ----------------------- | ------- | --- | ----- |
+| `getState()`            | Yes | Yes | Android includes live frame metrics; iOS includes device formats/capabilities |
+| `getDiagnostics()`      | Yes | Yes | Bounded native diagnostic history |
+| `clearDiagnostics()`    | No in 0.2.0 | Yes | Do not call on Android until capability parity lands |
+| `startStreaming()`      | Yes | Source path | Android physically proven; iOS a6700 certification pending |
+| `stopStreaming()`       | Yes | Source path | Stops native capture without conflating view unmount with session teardown |
+| `capturePreviewFrame()` | No in 0.2.0 | Yes | iOS persists the latest sampled JPEG; Android implementation pending |
+
+`SonyUsbStreamingView` renders through a native surface. Android reports `width`,
+`height`, `fps`, `frameCount`, `maximumFrameGapMs`, `pixelFormat`, `streamReady`,
+`audioAvailable`, `audioDevices`, and `transport` on its state payload. Audio availability
+means a USB audio endpoint was discovered; it does not mean PCM is captured or published.
+
 ```ts
 import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
 
@@ -27,7 +47,7 @@ package to JavaScript alone is not enough.
 | Method                                 | Return                     | Android      | iOS          | Notes                                                                 |
 | -------------------------------------- | -------------------------- | ------------ | ------------ | --------------------------------------------------------------------- |
 | `getState()`                           | `SonyCameraState`          | Yes          | Yes          | Synchronous snapshot                                                  |
-| `connect(options?)`                    | `Promise<SonyCameraState>` | Yes          | Yes          | `options` is reserved; native candidate overrides are not implemented |
+| `connect(options?)`                    | `Promise<SonyCameraState>` | Yes          | Yes          | Options are accepted. Android applies protocol/transport hints when supported; iOS supports USB PTP2 only. |
 | `disconnect()`                         | `Promise<SonyCameraState>` | Yes          | Yes          | Safe to call during cleanup                                           |
 | `startLiveView()`                      | `Promise<SonyCameraState>` | Yes          | Yes          | Requests native JPEG streaming                                        |
 | `stopLiveView()`                       | `Promise<SonyCameraState>` | Yes          | Yes          | Stops the live-view request loop                                      |
@@ -37,10 +57,10 @@ package to JavaScript alone is not enough.
 | `getDiagnostics()`                     | `SonyDiagnosticsSnapshot`  | Yes          | Yes          | Full retained trace; synchronous                                      |
 | `clearDiagnostics()`                   | `void`                     | Yes          | Yes          | Clears the retained trace, including Android's persisted copy         |
 
-`connect(options)` accepts the `SonyConnectOptions` argument on both platforms. Candidate
-selection and transport overrides are **not implemented**: an override is recorded in the
-diagnostics trace and then ignored. It is accepted so that the documented signature does
-not throw, not because it selects anything.
+`connect(options)` accepts `SonyConnectOptions` on both platforms.
+On Android, candidate/protocol/transport preference is resolved when supported transport
+paths are present. On iOS, non-USB transport/protocol preferences are rejected with an
+explicit error because only wired PTP2 is implemented in this release.
 
 ## Diagnostics
 

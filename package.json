@@ -1,9 +1,24 @@
 {
   "name": "expo-sony-camera",
-  "version": "0.2.0",
-  "description": "Expo and React Native Sony camera control module for Android and iOS: USB PTP2, ScalarWebAPI Wi-Fi live view, remote shutter, and JPEG capture",
+  "version": "0.2.1",
+  "description": "Expo and React Native Sony camera module with Android USB UVC streaming, USB PTP2, ScalarWebAPI live view, remote shutter, and JPEG capture",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "files": [
+    "android/build.gradle",
+    "android/libs",
+    "android/src",
+    "build",
+    "docs",
+    "ios",
+    "src",
+    "app.plugin.js",
+    "expo-module.config.json",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "scripts": {
     "build": "node internal/module_scripts/build.js",
     "build:watch": "node internal/module_scripts/build.js --watch",
@@ -14,10 +29,12 @@
     "test:watch": "node internal/module_scripts/test.js --watch",
     "sync-version": "node internal/module_scripts/sync-version.js",
     "sync-version:check": "node internal/module_scripts/sync-version.js --check",
-    "prepublishOnly": "npm run sync-version && npm run build && npm run lint && npm test",
+    "prepublishOnly": "npm run verify:uvc-artifacts && npm run sync-version && npm run build && npm run lint && npm test",
     "prepare": "node internal/module_scripts/sync-version.js && node internal/module_scripts/prepare.js",
     "open:ios": "node internal/module_scripts/open-ios.js",
-    "open:android": "node internal/module_scripts/open-android.js"
+    "open:android": "node internal/module_scripts/open-android.js",
+    "build:uvc-aar": "bash scripts/build-uvc-aar.sh",
+    "verify:uvc-artifacts": "bash scripts/verify-uvc-artifacts.sh"
   },
   "keywords": [
     "react-native",

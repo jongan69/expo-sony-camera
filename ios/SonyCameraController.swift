@@ -30,9 +30,15 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
 
   private static let maxDiagnostics = 2_000
   private static let maxPayloadDiagnostics = 200
-  private static let connectOptionKeys: Set<String> = [
-    "candidateId", "preferredProtocol", "preferredTransport",
-  ]
+  private struct ConnectPreference {
+    let protocolName: String?
+    let transport: String?
+    let candidateId: String?
+
+    var prefersUsb: Bool { protocolName == "sony_camera_control_ptp2" || transport == "usb" }
+    var prefersScalar: Bool { protocolName == "sony_scalar_webapi_v1" || transport == "scalar_http" }
+    var prefersPtpIp: Bool { protocolName == "sony_camera_control_ptp3" || transport == "ptp_ip" }
+  }
 
   private static let timestampFormatter: DateFormatter = {
     let formatter = DateFormatter()
@@ -56,6 +62,7 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
       diagnostics.removeFirst(diagnostics.count - Self.maxDiagnostics)
     }
     stateLock.unlock()
+    NSLog("[SonyCamera][trace] %@", event)
   }
 
   /// The full retained trace, not the truncated copy embedded in state payloads.
@@ -118,18 +125,77 @@ final class SonyCameraController: NSObject, ICDeviceBrowserDelegate, ICCameraDev
     return statePayloadLocked()
   }
 
-  /// `options` carries the `SonyConnectOptions` contract. Candidate selection and
-  /// transport overrides are not implemented, so an unsupported override is recorded and
-  /// ignored rather than silently pretending it was honoured.
+  /// `options` carries the `SonyConnectOptions` contract. Android-style candidate /
+  /// transport preference is accepted here; unsupported transports/protocols fail fast
+  /// to avoid silent behavioral mismatches.
   func connectBlocking(options: [String: Any] = [:]) throws -> [String: Any] {
-    let overrides = options.filter { Self.connectOptionKeys.contains($0.key) }
-    if !overrides.isEmpty {
-      trace("connect options ignored (candidate selection is not implemented): \(overrides)")
+    if let preference = parseConnectPreference(options: options) {
+      trace(
+        "connect options resolved protocol=\(preference.protocolName ?? "none") transport=\(preference.transport ?? "none")"
+          + " candidate=\(preference.candidateId ?? "none")"
+      )
+      if preference.prefersPtpIp {
+        return updateState(
+          "error",
+          "Sony Camera Control PTP/IP (PTP3) is not implemented in this release.",
+        )
+      }
+      if preference.prefersScalar {
+        return updateState("error", "Wireless transport is not implemented on iOS in this release.")
+      }
+      if preference.prefersUsb, camera == nil {
+        return updateState(
+          "disconnected",
+          "USB transport was requested, but no compatible Sony USB camera is attached.",
+        )
+      }
     }
     guard let camera else {
       return updateState("disconnected", "No compatible Sony PTP camera is attached.")
     }
     return try workQueue.sync { try connectInternal(camera) }
+  }
+
+  private func parseConnectPreference(options: [String: Any]) -> ConnectPreference? {
+    let normalizedProtocol = normalizeProtocol(options["preferredProtocol"] as? String)
+    let normalizedTransport = normalizeTransport(options["preferredTransport"] as? String)
+    let candidateId = options["candidateId"] as? String
+    let parsedCandidate = candidateId.flatMap(parseCandidate)
+    let protocolName = normalizedProtocol ?? parsedCandidate?.0
+    let transport = normalizedTransport ?? parsedCandidate?.1
+    if protocolName == nil && transport == nil { return nil }
+    return ConnectPreference(
+      protocolName: protocolName,
+      transport: transport,
+      candidateId: candidateId
+    )
+  }
+
+  private func parseCandidate(_ candidateId: String) -> (String?, String?) {
+    let parts = candidateId.split(separator: ":", omittingEmptySubsequences: false)
+    if parts.count < 3 { return (nil, nil) }
+    return (
+      normalizeProtocol(String(parts[parts.count - 2])),
+      normalizeTransport(String(parts[parts.count - 1]))
+    )
+  }
+
+  private func normalizeProtocol(_ value: String?) -> String? {
+    switch value {
+    case "sony_camera_control_ptp2", "sony_camera_control_ptp3", "sony_scalar_webapi_v1":
+      return value
+    default:
+      return nil
+    }
+  }
+
+  private func normalizeTransport(_ value: String?) -> String? {
+    switch value {
+    case "usb", "ptp_ip", "scalar_http":
+      return value
+    default:
+      return nil
+    }
   }
 
   func startLiveView() throws {

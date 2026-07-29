@@ -31,9 +31,9 @@ public final class SonyCameraModule: Module, SonyCameraControllerListener {
       controller.statePayload()
     }
 
-    // The options argument is declared in TypeScript, so it has to be accepted here even
-    // though candidate selection is not implemented yet. Expo validates argument count,
-    // so a zero-argument definition made the documented signature throw at runtime.
+    // The options argument is declared in TypeScript and must be accepted here so the
+    // documented signature matches runtime. Android supports transport/protocol preference
+    // hints and iOS enforces supported wired behavior.
     AsyncFunction("connect") { (options: [String: Any]?) in
       try controller.connectBlocking(options: options ?? [:])
     }
@@ -76,14 +76,21 @@ public final class SonyCameraModule: Module, SonyCameraControllerListener {
   }
 
   func sonyCameraController(_ controller: SonyCameraController, didChangeState payload: [String: Any]) {
+    let state = payload["state"] as? String ?? "unknown"
+    let message = payload["message"] as? String ?? ""
+    NSLog("[SonyCamera][state] %@: %@", state, message)
     sendEvent("onStateChanged", payload)
   }
 
   func sonyCameraController(_ controller: SonyCameraController, didAttach payload: [String: Any]) {
+    let state = payload["state"] as? String ?? "unknown"
+    let message = payload["message"] as? String ?? ""
+    NSLog("[SonyCamera][attach] %@: %@", state, message)
     sendEvent("onDeviceAttached", payload)
   }
 
   func sonyCameraController(_ controller: SonyCameraController, didCapture payload: [String: Any]) {
+    NSLog("[SonyCamera][capture] completed")
     sendEvent("onPhotoCaptured", payload)
   }
 

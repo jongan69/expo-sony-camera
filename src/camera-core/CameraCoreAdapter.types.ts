@@ -24,7 +24,7 @@ export type CameraCorePluginDescriptor = {
   apiVersion: 1;
   displayName: string;
   providerKind: 'remote_camera';
-  supportedPlatforms: Array<'android' | 'ios'>;
+  supportedPlatforms: ('android' | 'ios')[];
   connectionModes: CameraCoreConnectionMode[];
   priority: number;
   certification: 'built_in' | 'experimental' | 'disabled';
@@ -34,7 +34,7 @@ export type CameraCoreCapabilities = {
   revision: number;
   preview: {
     supported: boolean;
-    formats: Array<'native_surface' | 'jpeg_stream'>;
+    formats: ('native_surface' | 'jpeg_stream')[];
     touchFocus: boolean;
     sampledFrames: boolean;
   };

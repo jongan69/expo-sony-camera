@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1
+
+### Added
+
+- Added direct Android USB UVC/MJPEG preview for the Sony a6700 in USB Streaming mode.
+  The Sony-specific libuvc framing fix reconstructs MJPEG frames split across Android
+  16 KB bulk reads and publishes only complete JPEGs ending in EOI.
+- Added USB stream state, frame cadence, resolution, frame-gap, transport, and USB audio
+  device diagnostics.
+- Added native USB streaming views for Android and iOS, plus production-readiness,
+  hardware-evidence, setup, and third-party provenance documentation.
+
+### Changed
+
+- Vendored the complete patched UVCAndroid source at its exact upstream commit and added
+  reproducible build, four-ABI verification, certified-artifact rollback, and SHA-256
+  integrity tooling.
+
 ## 0.2.0
 
 ### Fixed
